@@ -15,13 +15,34 @@ function formatBytes(bytes) {
   }).join('')
 }
 
+function cmdArgToString(cmdArg) {
+  if (cmdArg === 0) return ''
+
+  const bytes = [
+    cmdArg & 0xFF,
+    (cmdArg >> 8) & 0xFF,
+    (cmdArg >> 16) & 0xFF,
+    (cmdArg >> 24) & 0xFF
+  ]
+
+  const str = bytes
+    .map(b => b > 0 ? String.fromCharCode(b) : '')
+    .join('')
+    .replace(/\0/g, '')
+
+  return str.match(/^[a-zA-Z0-9_]+$/) ? str : ''
+}
+
 function formatActionAsLua(action) {
+  const cmdArgStr = cmdArgToString(action.cmd_arg)
+  const cmdArgComment = cmdArgStr ? ` -- "${cmdArgStr}"` : ''
+
   return `{
     m_uID   = ${action.m_uID},
     trg_sum = ${action.trg_sum},
     res_sum = ${action.res_sum},
     cmd_no  = ${action.cmd_no}, -- ${getActionName(action.cmd_no)}
-    cmd_arg = ${action.cmd_arg},
+    cmd_arg = ${action.cmd_arg},${cmdArgComment}
     info    = ${action.info},
     target  =
     {
