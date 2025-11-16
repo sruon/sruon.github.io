@@ -1,44 +1,89 @@
 import { parseAction, getActionName, getMissName } from '/js/actionparser.js'
 
-const textInput = document.getElementById('textInput')
-const results = document.getElementById('results')
-
-function parseHexDump(text) {
-  const packets = []
-  const lines = text.split('\n')
-  let currentPacket = []
-  let currentTimestamp = null
-
-  for (const line of lines) {
-    if (line.includes('Packet 0x')) {
-      if (currentPacket.length > 0) {
-        packets.push({ bytes: currentPacket, timestamp: currentTimestamp })
-        currentPacket = []
-      }
-
-      const timestampMatch = line.match(/\[([^\]]+)\]/)
-      currentTimestamp = timestampMatch ? timestampMatch[1] : null
-      continue
-    }
-
-    const parts = line.split('|')
-    if (parts.length >= 3) {
-      const hexSection = parts[1].trim()
-      const hexBytes = hexSection.split(/\s+/)
-
-      for (const hex of hexBytes) {
-        if (hex !== '--' && hex.match(/^[0-9A-Fa-f]{2}$/)) {
-          currentPacket.push(parseInt(hex, 16))
-        }
-      }
-    }
+function hexToBytes(hex) {
+  const bytes = []
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16))
   }
+  return bytes
+}
 
-  if (currentPacket.length > 0) {
-    packets.push({ bytes: currentPacket, timestamp: currentTimestamp })
-  }
+function formatBytes(bytes) {
+  return bytes.map((b, i) => {
+    const hex = '0x' + b.toString(16).padStart(2, '0').toUpperCase()
+    return i % 16 === 0 ? (i > 0 ? '\n' + hex : hex) : ' ' + hex
+  }).join('')
+}
 
-  return packets
+function cmdArgToString(cmdArg) {
+  if (cmdArg === 0) return ''
+
+  const bytes = [
+    cmdArg & 0xFF,
+    (cmdArg >> 8) & 0xFF,
+    (cmdArg >> 16) & 0xFF,
+    (cmdArg >> 24) & 0xFF
+  ]
+
+  const str = bytes
+    .map(b => b > 0 ? String.fromCharCode(b) : '')
+    .join('')
+    .replace(/\0/g, '')
+
+  return str.match(/^[a-zA-Z0-9_]+$/) ? str : ''
+}
+
+function parseScale(scale) {
+  const distortion = scale & 0b11           // lower 2 bits
+  const knockback = (scale >> 2) & 0b111    // upper 3 bits
+  return { knockback, distortion }
+}
+
+function formatActionAsLua(action) {
+  const cmdArgStr = cmdArgToString(action.cmd_arg)
+  const cmdArgComment = cmdArgStr ? ` -- "${cmdArgStr}"` : ''
+
+  return `{
+    m_uID   = ${action.m_uID},
+    trg_sum = ${action.trg_sum},
+    res_sum = ${action.res_sum},
+    cmd_no  = ${action.cmd_no}, -- ${getActionName(action.cmd_no)}
+    cmd_arg = ${action.cmd_arg},${cmdArgComment}
+    info    = ${action.info},
+    target  =
+    {
+${action.target.map(target => `        {
+            m_uID      = ${target.m_uID},
+            result_sum = ${target.result_sum},
+            result     =
+            {
+${target.result.map(result => {
+                const scaleData = parseScale(result.scale)
+                return `                {
+                    miss          = ${result.miss}, -- ${getMissName(result.miss)}
+                    kind          = ${result.kind},
+                    sub_kind      = ${result.sub_kind},
+                    info          = ${result.info},
+                    scale         = ${result.scale}, -- knockback: ${scaleData.knockback}, distortion: ${scaleData.distortion}
+                    value         = ${result.value},
+                    message       = ${result.message},
+                    bit           = ${result.bit},
+                    has_proc      = ${result.has_proc},
+                    proc_kind     = ${result.proc_kind},
+                    proc_info     = ${result.proc_info},
+                    proc_value    = ${result.proc_value},
+                    proc_message  = ${result.proc_message},
+                    has_react     = ${result.has_react},
+                    react_kind    = ${result.react_kind},
+                    react_info    = ${result.react_info},
+                    react_value   = ${result.react_value},
+                    react_message = ${result.react_message},
+                }`
+              }).join(',\n')},
+            },
+        }`).join(',\n')},
+    },
+}`
 }
 
 function generateSummary(action) {
@@ -63,153 +108,43 @@ function generateSummary(action) {
   return `${casterId} → ${targetStr}`
 }
 
-function cmdArgToString(cmdArg) {
-  if (cmdArg === 0) return ''
+const contentDiv = document.getElementById('content')
+const hash = window.location.hash.substring(1)
 
-  const bytes = [
-    cmdArg & 0xFF,
-    (cmdArg >> 8) & 0xFF,
-    (cmdArg >> 16) & 0xFF,
-    (cmdArg >> 24) & 0xFF
-  ]
+if (!hash) {
+  contentDiv.innerHTML = '<div class="notification is-warning">No packet data in URL. Use a link from the parser page.</div>'
+} else {
+  try {
+    const bytes = hexToBytes(hash)
+    const action = parseAction(bytes)
 
-  const str = bytes
-    .map(b => b > 0 ? String.fromCharCode(b) : '')
-    .join('')
-    .replace(/\0/g, '')
-
-  return str.match(/^[a-zA-Z0-9_]+$/) ? str : ''
-}
-
-function formatActionAsLua(action) {
-  const cmdArgStr = cmdArgToString(action.cmd_arg)
-  const cmdArgComment = cmdArgStr ? ` -- "${cmdArgStr}"` : ''
-
-  return `{
-    m_uID   = ${action.m_uID},
-    trg_sum = ${action.trg_sum},
-    res_sum = ${action.res_sum},
-    cmd_no  = ${action.cmd_no}, -- ${getActionName(action.cmd_no)}
-    cmd_arg = ${action.cmd_arg},${cmdArgComment}
-    info    = ${action.info},
-    target  =
-    {
-${action.target.map(target => `        {
-            m_uID      = ${target.m_uID},
-            result_sum = ${target.result_sum},
-            result     =
-            {
-${target.result.map(result => `                {
-                    miss          = ${result.miss}, -- ${getMissName(result.miss)}
-                    kind          = ${result.kind},
-                    sub_kind      = ${result.sub_kind},
-                    info          = ${result.info},
-                    scale         = ${result.scale},
-                    value         = ${result.value},
-                    message       = ${result.message},
-                    bit           = ${result.bit},
-                    has_proc      = ${result.has_proc},
-                    proc_kind     = ${result.proc_kind},
-                    proc_info     = ${result.proc_info},
-                    proc_value    = ${result.proc_value},
-                    proc_message  = ${result.proc_message},
-                    has_react     = ${result.has_react},
-                    react_kind    = ${result.react_kind},
-                    react_info    = ${result.react_info},
-                    react_value   = ${result.react_value},
-                    react_message = ${result.react_message},
-                }`).join(',\n')},
-            },
-        }`).join(',\n')},
-    },
-}`
-}
-
-function formatBytes(bytes) {
-  return bytes.map((b, i) => {
-    const hex = '0x' + b.toString(16).padStart(2, '0').toUpperCase()
-    return i % 16 === 0 ? (i > 0 ? '\n' + hex : hex) : ' ' + hex
-  }).join('')
-}
-
-function renderPackets(text) {
-  if (!text.trim()) {
-    results.innerHTML = ''
-    return
-  }
-
-  const packets = parseHexDump(text)
-  const parsed = packets
-    .map(packet => {
-      try {
-        const action = parseAction(packet.bytes)
-        if (action) {
-          return { bytes: packet.bytes, action, timestamp: packet.timestamp }
-        }
-        return null
-      } catch (err) {
-        return null
-      }
-    })
-    .filter(packet => packet !== null)
-
-  if (parsed.length === 0) {
-    results.innerHTML = ''
-    return
-  }
-
-  // Clear previous results
-  results.innerHTML = `<h2 class="title is-4 mt-5">Parsed Packets (${parsed.length})</h2>`
-
-  const template = document.getElementById('packet-template')
-
-  parsed.forEach((packet, idx) => {
-    const clone = template.content.cloneNode(true)
-    const box = clone.querySelector('.packet')
-    box.id = `packet-${idx}`
-
-    // Set timestamp
-    const timestampEl = clone.querySelector('.timestamp')
-    if (packet.timestamp) {
-      timestampEl.textContent = packet.timestamp
+    if (!action) {
+      contentDiv.innerHTML = '<div class="notification is-danger">Invalid packet: First byte must be 0x28</div>'
     } else {
-      timestampEl.remove()
+      contentDiv.innerHTML = `
+        <div class="box">
+          <h2 class="title is-4">${getActionName(action.cmd_no)}: ${generateSummary(action)}</h2>
+
+          <h3 class="subtitle is-5">Raw Bytes (${bytes.length} bytes)</h3>
+          <pre><code>${formatBytes(bytes)}</code></pre>
+
+          <h3 class="subtitle is-5">Details</h3>
+          <ul>
+            <li>Caster: <code>${action.m_uID}</code></li>
+            <li>Action: ${getActionName(action.cmd_no)} (cmd_no: ${action.cmd_no})</li>
+            <li>Targets: ${action.trg_sum}</li>
+            <li>Command Arg: <code>${action.cmd_arg}</code></li>
+          </ul>
+
+          <h3 class="subtitle is-5">Lua Format</h3>
+          <pre><code>${formatActionAsLua(action)}</code></pre>
+        </div>
+      `
     }
-
-    // Set action name and summary
-    clone.querySelector('.action-name').textContent = getActionName(packet.action.cmd_no)
-    clone.querySelector('.summary').textContent = generateSummary(packet.action)
-
-    // Set share link
-    const hexString = packet.bytes.map(b => b.toString(16).padStart(2, '0')).join('')
-    const shareLink = clone.querySelector('.share-link')
-    shareLink.href = `/actions/#${hexString}`
-    shareLink.onclick = (e) => e.stopPropagation()
-
-    // Set header click handler
-    const header = clone.querySelector('.packet-header')
-    header.onclick = (e) => {
-      if (e.target.tagName !== 'A') {
-        box.classList.toggle('open')
-      }
-    }
-
-    // Set content
-    clone.querySelector('.byte-count').textContent = packet.bytes.length
-    clone.querySelector('.raw-bytes').textContent = formatBytes(packet.bytes)
-    clone.querySelector('.caster').textContent = packet.action.m_uID
-    clone.querySelector('.action-detail').textContent = `${getActionName(packet.action.cmd_no)} (cmd_no: ${packet.action.cmd_no})`
-    clone.querySelector('.targets').textContent = packet.action.trg_sum
-    clone.querySelector('.cmd-arg').textContent = packet.action.cmd_arg
-    clone.querySelector('.lua-format').textContent = formatActionAsLua(packet.action)
-
-    results.appendChild(clone)
-  })
+  } catch (err) {
+    contentDiv.innerHTML = `<div class="notification is-danger">Failed to parse packet: ${err.message}</div>`
+  }
 }
-
-textInput.addEventListener('input', (e) => {
-  renderPackets(e.target.value)
-})
 // Thank you to https://github.com/daviddarnes/heading-anchors
 // Thank you to https://amberwilson.co.uk/blog/are-your-anchor-links-accessible/
 
